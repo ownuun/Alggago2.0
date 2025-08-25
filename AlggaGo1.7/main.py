@@ -349,41 +349,493 @@ def show_controls_screen(screen, clock):
     font_small = get_font(18)
     running = True
 
+    # 페이드 전환 효과 변수
+    fade_alpha = 0
+    fade_surface = pygame.Surface((WIDTH, HEIGHT))
+    fade_surface.set_alpha(fade_alpha)
+    fade_duration = 30  # 프레임 수
+    fade_step = 255 // fade_duration
+
+    # 튜토리얼용 물리 공간
+    tutorial_space = pymunk.Space()
+    tutorial_space.gravity = (0, 0)
+    tutorial_space.damping = 0.1
+    
+    # 튜토리얼용 돌들
+    tutorial_stones = []
+    
+    # 세로로 긴 커스텀 판 크기 설정
+    tutorial_width = 350
+    tutorial_height = 500
+    tutorial_x = (WIDTH - tutorial_width) // 2
+    tutorial_y = 90  # 위로 올림 (100 -> 90)
+    
+    # 튜토리얼 상태 변수
+    tutorial_completed = False
+    tutorial_failed = False
+    show_completion_screen = False
+    show_failure_screen = False
+    
+    def reset_tutorial():
+        nonlocal tutorial_completed, tutorial_failed, show_completion_screen, show_failure_screen
+        nonlocal tutorial_dragging, tutorial_drag_shape, tutorial_drag_start, arrow_visible, arrow_time
+        nonlocal failure_timer, result_delay_timer, pending_result
+        
+        # 튜토리얼 상태 초기화
+        tutorial_completed = False
+        tutorial_failed = False
+        show_completion_screen = False
+        show_failure_screen = False
+        tutorial_dragging = False
+        tutorial_drag_shape = None
+        tutorial_drag_start = Vec2d(0, 0)
+        arrow_visible = True
+        arrow_time = 0
+        failure_timer = 0
+        result_delay_timer = 0
+        pending_result = None
+        
+        # 튜토리얼 공간 초기화
+        tutorial_space.remove(player_body, player_shape)
+        tutorial_space.remove(opponent_body, opponent_shape)
+        tutorial_stones.clear()
+        
+        # 플레이어 돌 재생성
+        player_body.position = (tutorial_x + tutorial_width // 2, tutorial_y + tutorial_height - 90)
+        player_body.velocity = (0, 0)
+        tutorial_space.add(player_body, player_shape)
+        tutorial_stones.append(player_shape)
+        
+        # 상대 돌 재생성
+        opponent_body.position = (tutorial_x + tutorial_width // 2, tutorial_y + 90)
+        opponent_body.velocity = (0, 0)
+        tutorial_space.add(opponent_body, opponent_shape)
+        tutorial_stones.append(opponent_shape)
+        
+        # 캐시 정리
+        tutorial_path_cache.clear()
+    
+    # 플레이어 돌 (하단)
+    player_moment = pymunk.moment_for_circle(STONE_MASS, 0, STONE_RADIUS)
+    player_body = pymunk.Body(STONE_MASS, player_moment)
+    player_body.position = (tutorial_x + tutorial_width // 2, tutorial_y + tutorial_height - 90)
+    player_shape = pymunk.Circle(player_body, STONE_RADIUS)
+    player_shape.elasticity = 1.0
+    player_shape.friction = 0.9
+    player_shape.color = (0, 0, 0, 255)
+    tutorial_space.add(player_body, player_shape)
+    tutorial_stones.append(player_shape)
+    
+    # 상대 돌 (상단)
+    opponent_moment = pymunk.moment_for_circle(STONE_MASS, 0, STONE_RADIUS)
+    opponent_body = pymunk.Body(STONE_MASS, opponent_moment)
+    opponent_body.position = (tutorial_x + tutorial_width // 2, tutorial_y + 90)
+    opponent_shape = pymunk.Circle(opponent_body, STONE_RADIUS)
+    opponent_shape.elasticity = 1.0
+    opponent_shape.friction = 0.9
+    opponent_shape.color = (255, 255, 255, 255)
+    tutorial_space.add(opponent_body, opponent_shape)
+    tutorial_stones.append(opponent_shape)
+    
+    # 튜토리얼용 드래그 변수
+    tutorial_dragging = False
+    tutorial_drag_shape = None
+    tutorial_drag_start = Vec2d(0, 0)
+    tutorial_path_cache = {}
+    
+    # 화살표 애니메이션 변수
+    arrow_visible = True
+    arrow_time = 0
+    arrow_animation_speed = 0.1
+    
+    # 실패 타이머
+    failure_timer = 0
+    failure_delay = 180  # 3초 (60fps * 3)
+    
+    # 결과창 지연 타이머
+    result_delay_timer = 0
+    result_delay = 30  # 0.5초 (60fps * 0.5)
+    pending_result = None  # "success" 또는 "failure"
+
+    # 페이드 인 효과
+    for i in range(fade_duration):
+        screen.fill((50, 50, 50))
+        
+        # 제목
+        title_surf = font_large.render("튜토리얼", True, (255, 255, 255))
+        title_rect = title_surf.get_rect(center=(WIDTH // 2, 50))
+        screen.blit(title_surf, title_rect)
+
+        # 튜토리얼 게임 영역 (세로로 긴 커스텀 판)
+        tutorial_area = pygame.Rect(tutorial_x, tutorial_y, tutorial_width, tutorial_height)
+        pygame.draw.rect(screen, (210, 180, 140), tutorial_area)
+        pygame.draw.rect(screen, (0, 0, 0), tutorial_area, 3)
+
+        # 튜토리얼 격자선 그리기
+        grid_spacing = 50  # 격자 간격
+        
+        # 세로 격자선
+        for x in range(tutorial_x, tutorial_x + tutorial_width + 1, grid_spacing):
+            line_color = (139, 69, 19) if x == tutorial_x or x == tutorial_x + tutorial_width else (160, 82, 45)
+            line_width = 2 if x == tutorial_x or x == tutorial_x + tutorial_width else 1
+            pygame.draw.line(screen, line_color, (x, tutorial_y), (x, tutorial_y + tutorial_height), line_width)
+        
+        # 가로 격자선
+        for y in range(tutorial_y, tutorial_y + tutorial_height + 1, grid_spacing):
+            line_color = (139, 69, 19) if y == tutorial_y or y == tutorial_y + tutorial_height else (160, 82, 45)
+            line_width = 2 if y == tutorial_y or y == tutorial_y + tutorial_height else 1
+            pygame.draw.line(screen, line_color, (tutorial_x, y), (tutorial_x + tutorial_width, y), line_width)
+        
+        # 튜토리얼 돌들 그리기
+        for stone in tutorial_stones:
+            pos = stone.body.position
+            color = stone.color[:3]
+            pygame.draw.circle(screen, color, (int(pos.x), int(pos.y)), STONE_RADIUS)
+
+        # 돌아가기 버튼
+        back_button_rect = pygame.Rect(WIDTH // 2 - 100, HEIGHT - 80, 200, 50)
+        pygame.draw.rect(screen, (100, 100, 100), back_button_rect)
+        pygame.draw.rect(screen, (255, 255, 255), back_button_rect, 2)
+        
+        back_text = font_medium.render("돌아가기", True, (255, 255, 255))
+        back_text_rect = back_text.get_rect(center=back_button_rect.center)
+        screen.blit(back_text, back_text_rect)
+
+        # 페이드 효과 적용
+        fade_alpha = 255 - (i * fade_step)
+        fade_surface.set_alpha(fade_alpha)
+        fade_surface.fill((0, 0, 0))
+        screen.blit(fade_surface, (0, 0))
+
+        pygame.display.flip()
+        clock.tick(60)
+
     while running:
         screen.fill((50, 50, 50))
 
         # 제목
-        title_surf = font_large.render("조작 안내", True, (255, 255, 255))
-        title_rect = title_surf.get_rect(center=(WIDTH // 2, 150))
+        title_surf = font_large.render("튜토리얼", True, (255, 255, 255))
+        title_rect = title_surf.get_rect(center=(WIDTH // 2, 50))
         screen.blit(title_surf, title_rect)
 
-        # 조작법 텍스트
-        control_lines = [
-            "마우스 클릭: 모드 선택 / 알까기",
-            "키보드 1~4, Q, W: 모드 선택",
-            "",
-            "게임 중 BACKSPACE: 모드 선택 화면으로",
-            "메뉴에서 ESC: 이전 화면으로"
-        ]
-        y_start = 250
-        for i, line in enumerate(control_lines):
-            line_surf = font_medium.render(line, True, (220, 220, 220))
-            line_rect = line_surf.get_rect(center=(WIDTH // 2, y_start + i * 40))
-            screen.blit(line_surf, line_rect)
+        # 튜토리얼 게임 영역 (세로로 긴 커스텀 판)
+        tutorial_area = pygame.Rect(tutorial_x, tutorial_y, tutorial_width, tutorial_height)
+        pygame.draw.rect(screen, (210, 180, 140), tutorial_area)
+        pygame.draw.rect(screen, (0, 0, 0), tutorial_area, 3)
 
-        # 돌아가기 안내
-        hint_surf = font_small.render("아무 키나 클릭하여 돌아가기", True, (200, 200, 200))
-        hint_rect = hint_surf.get_rect(center=(WIDTH // 2, HEIGHT - 100))
-        screen.blit(hint_surf, hint_rect)
+        # 튜토리얼 격자선 그리기
+        grid_spacing = 50  # 격자 간격
+        
+        # 세로 격자선
+        for x in range(tutorial_x, tutorial_x + tutorial_width + 1, grid_spacing):
+            line_color = (139, 69, 19) if x == tutorial_x or x == tutorial_x + tutorial_width else (160, 82, 45)
+            line_width = 2 if x == tutorial_x or x == tutorial_x + tutorial_width else 1
+            pygame.draw.line(screen, line_color, (x, tutorial_y), (x, tutorial_y + tutorial_height), line_width)
+        
+        # 가로 격자선
+        for y in range(tutorial_y, tutorial_y + tutorial_height + 1, grid_spacing):
+            line_color = (139, 69, 19) if y == tutorial_y or y == tutorial_y + tutorial_height else (160, 82, 45)
+            line_width = 2 if y == tutorial_y or y == tutorial_y + tutorial_height else 1
+            pygame.draw.line(screen, line_color, (tutorial_x, y), (tutorial_x + tutorial_width, y), line_width)
+
+        # 튜토리얼 돌들 그리기
+        for stone in tutorial_stones:
+            pos = stone.body.position
+            color = stone.color[:3]
+            pygame.draw.circle(screen, color, (int(pos.x), int(pos.y)), STONE_RADIUS)
+
+        # 화살표 애니메이션 (흑돌 위에 둥둥 떠다니는 효과)
+        if arrow_visible and not tutorial_dragging and not show_completion_screen:
+            arrow_time += arrow_animation_speed
+            arrow_offset = int(10 * abs(math.sin(arrow_time)))  # 위아래로 움직임
+            
+            # 화살표 그리기 (흑돌 위에)
+            player_pos = player_body.position
+            arrow_y = int(player_pos.y) - STONE_RADIUS - 30 + arrow_offset
+            
+            # 화살표 몸통
+            arrow_points = [
+                (int(player_pos.x) - 15, arrow_y + 20),
+                (int(player_pos.x) + 15, arrow_y + 20),
+                (int(player_pos.x), arrow_y)
+            ]
+            pygame.draw.polygon(screen, (255, 255, 0), arrow_points)  # 노란색 화살표
+            pygame.draw.polygon(screen, (255, 165, 0), arrow_points, 2)  # 주황색 테두리
+            
+            # 튜토리얼 안내 메시지
+            instruction_text = "검은 돌을 아래로 당겨서 흰 돌을 맞추세요!"
+            instruction_surface = font_medium.render(instruction_text, True, (255, 255, 255))
+            instruction_rect = instruction_surface.get_rect(center=(WIDTH // 2, tutorial_y + tutorial_height + 30))
+            screen.blit(instruction_surface, instruction_rect)
+
+        # 드래그 중일 때 경로 표시
+        if tutorial_dragging and tutorial_drag_shape and not show_completion_screen:
+            mouse_pos = Vec2d(*pygame.mouse.get_pos())
+            raw_vec = mouse_pos - tutorial_drag_start
+            length = raw_vec.length
+            unit = raw_vec.normalized() if length > 0 else Vec2d(0, 0)
+            display_len = min(length, MAX_DRAG_LENGTH)
+            center = tutorial_drag_shape.body.position
+            end_pos = center + unit * display_len
+
+            # 빨간선 (실선)
+            pygame.draw.line(
+                screen, (255, 0, 0),
+                (int(center.x), int(center.y)),
+                (int(end_pos.x), int(end_pos.y)), 2
+            )
+
+            # 예상 경로 시뮬레이션 (Easy 모드와 동일)
+            if length > 0:
+                actual_raw_vec = tutorial_drag_start - mouse_pos
+                actual_length = actual_raw_vec.length
+                
+                if actual_length > MAX_DRAG_LENGTH:
+                    actual_raw_vec = actual_raw_vec.normalized() * MAX_DRAG_LENGTH
+                    actual_length = MAX_DRAG_LENGTH
+                
+                cache_key = (int(actual_raw_vec.x), int(actual_raw_vec.y), int(actual_length))
+                
+                if cache_key not in tutorial_path_cache:
+                    # 임시 시뮬레이션
+                    temp_space = pymunk.Space()
+                    temp_space.gravity = (0, 0)
+                    temp_space.damping = tutorial_space.damping
+                    
+                    # 상대 돌 복사
+                    temp_opponent_moment = pymunk.moment_for_circle(STONE_MASS, 0, STONE_RADIUS)
+                    temp_opponent_body = pymunk.Body(STONE_MASS, temp_opponent_moment)
+                    temp_opponent_body.position = opponent_body.position
+                    temp_opponent_body.velocity = opponent_body.velocity
+                    temp_opponent_shape = pymunk.Circle(temp_opponent_body, STONE_RADIUS)
+                    temp_opponent_shape.elasticity = 1.0
+                    temp_opponent_shape.friction = 0.9
+                    temp_space.add(temp_opponent_body, temp_opponent_shape)
+                    
+                    # 플레이어 돌 복사
+                    temp_player_moment = pymunk.moment_for_circle(STONE_MASS, 0, STONE_RADIUS)
+                    temp_player_body = pymunk.Body(STONE_MASS, temp_player_moment)
+                    temp_player_body.position = center
+                    temp_player_shape = pymunk.Circle(temp_player_body, STONE_RADIUS)
+                    temp_player_shape.elasticity = 1.0
+                    temp_player_shape.friction = 0.9
+                    temp_space.add(temp_player_body, temp_player_shape)
+                    
+                    # 임펄스 적용
+                    impulse = actual_raw_vec.normalized() * (actual_length * FORCE_MULTIPLIER + MIN_FORCE)
+                    temp_player_body.apply_impulse_at_world_point(impulse, temp_player_body.position)
+                    
+                    # 경로 시뮬레이션
+                    path_points = []
+                    for _ in range(120):
+                        temp_space.step(1/60.0)
+                        path_points.append(temp_player_body.position)
+                        if temp_player_body.velocity.length < 5:
+                            break
+                    
+                    tutorial_path_cache[cache_key] = path_points
+                    temp_space.remove(temp_player_body, temp_player_shape)
+                    temp_space.remove(temp_opponent_body, temp_opponent_shape)
+                
+                # 경로 그리기
+                path_points = tutorial_path_cache[cache_key]
+                if len(path_points) > 1:
+                    for i in range(len(path_points) - 1):
+                        if i % 1 == 0:
+                            start_pt = path_points[i]
+                            end_pt = path_points[i + 1]
+                            pygame.draw.line(
+                                screen, (0, 200, 255),
+                                (int(start_pt.x), int(start_pt.y)),
+                                (int(end_pt.x), int(end_pt.y)), 2
+                            )
+                
+                # 최종 위치 표시
+                if path_points:
+                    final_pos = path_points[-1]
+                    pygame.draw.circle(screen, (0, 200, 255), (int(final_pos.x), int(final_pos.y)), 4)
+            
+            # 드래그 중일 때도 안내 메시지 표시
+            instruction_text = "검은 돌을 아래로 당겨서 흰 돌을 맞추세요!"
+            instruction_surface = font_medium.render(instruction_text, True, (255, 255, 255))
+            instruction_rect = instruction_surface.get_rect(center=(WIDTH // 2, tutorial_y + tutorial_height + 30))
+            screen.blit(instruction_surface, instruction_rect)
+
+        # 완료 화면
+        if show_completion_screen:
+            # 반투명 오버레이
+            overlay = pygame.Surface((WIDTH, HEIGHT))
+            overlay.set_alpha(150)
+            overlay.fill((0, 0, 0))
+            screen.blit(overlay, (0, 0))
+            
+            # 완료 메시지 박스 (브라운 톤)
+            message_box = pygame.Rect(WIDTH // 2 - 120, HEIGHT // 2 - 60, 240, 120)
+            pygame.draw.rect(screen, (120, 85, 60), message_box)  # 브라운 톤 배경
+            pygame.draw.rect(screen, (230, 210, 190), message_box, 2)  # 연한 베이지 테두리
+            
+            # 완료 메시지 (글씨 조금 작게)
+            success_text = font_medium.render("완료", True, (255, 255, 255))
+            success_rect = success_text.get_rect(center=(WIDTH // 2, HEIGHT // 2 - 15))
+            screen.blit(success_text, success_rect)
+            
+            # 돌아가기 버튼 (화이트 버튼)
+            back_button_rect = pygame.Rect(WIDTH // 2 - 60, HEIGHT // 2 + 18, 120, 34)
+            pygame.draw.rect(screen, (255, 255, 255), back_button_rect)
+            pygame.draw.rect(screen, (230, 210, 190), back_button_rect, 2)
+            
+            back_text = font_medium.render("돌아가기", True, (0, 0, 0))
+            back_text_rect = back_text.get_rect(center=back_button_rect.center)
+            screen.blit(back_text, back_text_rect)
+
+        # 실패 화면
+        if show_failure_screen:
+            # 반투명 오버레이
+            overlay = pygame.Surface((WIDTH, HEIGHT))
+            overlay.set_alpha(150)
+            overlay.fill((0, 0, 0))
+            screen.blit(overlay, (0, 0))
+            
+            # 실패 메시지 박스
+            message_box = pygame.Rect(WIDTH // 2 - 150, HEIGHT // 2 - 80, 300, 160)
+            pygame.draw.rect(screen, (139, 34, 34), message_box)  # 더 진한 빨간색
+            pygame.draw.rect(screen, (255, 255, 255), message_box, 2)
+            
+            # 실패 메시지
+            failure_text = font_large.render("실패!", True, (255, 255, 255))
+            failure_rect = failure_text.get_rect(center=(WIDTH // 2, HEIGHT // 2 - 40))
+            screen.blit(failure_text, failure_rect)
+            
+            # 부제목
+            subtitle_text = font_small.render("다시 한번 시도해보세요", True, (255, 220, 220))
+            subtitle_rect = subtitle_text.get_rect(center=(WIDTH // 2, HEIGHT // 2))
+            screen.blit(subtitle_text, subtitle_rect)
+            
+            # 다시하기 버튼
+            retry_button_rect = pygame.Rect(WIDTH // 2 - 80, HEIGHT // 2 + 30, 160, 40)
+            pygame.draw.rect(screen, (70, 130, 180), retry_button_rect)  # 스틸블루
+            pygame.draw.rect(screen, (255, 255, 255), retry_button_rect, 2)
+            
+            retry_text = font_medium.render("다시하기", True, (255, 255, 255))
+            retry_text_rect = retry_text.get_rect(center=retry_button_rect.center)
+            screen.blit(retry_text, retry_text_rect)
+
+        # 일반 돌아가기 버튼 (완료/실패 화면이 아닐 때만)
+        if not show_completion_screen and not show_failure_screen:
+            back_button_rect = pygame.Rect(WIDTH // 2 - 100, HEIGHT - 80, 200, 50)
+            pygame.draw.rect(screen, (100, 100, 100), back_button_rect)
+            pygame.draw.rect(screen, (255, 255, 255), back_button_rect, 2)
+            
+            back_text = font_medium.render("돌아가기", True, (255, 255, 255))
+            back_text_rect = back_text.get_rect(center=back_button_rect.center)
+            screen.blit(back_text, back_text_rect)
 
         pygame.display.flip()
 
+        # 이벤트 처리
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
                 pygame.quit()
                 exit()
-            if event.type == pygame.KEYDOWN or event.type == pygame.MOUSEBUTTONDOWN:
-                running = False  # 루프를 탈출하여 이전 화면으로 돌아감
+            elif event.type == pygame.MOUSEBUTTONDOWN:
+                mouse_pos = Vec2d(*event.pos)
+                
+                # 완료 화면에서 돌아가기 버튼 클릭
+                if show_completion_screen:
+                    back_button_rect = pygame.Rect(WIDTH // 2 - 100, HEIGHT // 2 + 20, 200, 50)
+                    if back_button_rect.collidepoint(event.pos):
+                        # 페이드 아웃 효과
+                        for i in range(fade_duration):
+                            fade_alpha = i * fade_step
+                            fade_surface.set_alpha(fade_alpha)
+                            fade_surface.fill((0, 0, 0))
+                            screen.blit(fade_surface, (0, 0))
+                            pygame.display.flip()
+                            clock.tick(60)
+                        running = False
+                
+                # 실패 화면에서 다시하기 버튼 클릭
+                elif show_failure_screen:
+                    retry_button_rect = pygame.Rect(WIDTH // 2 - 100, HEIGHT // 2 + 20, 200, 50)
+                    if retry_button_rect.collidepoint(event.pos):
+                        reset_tutorial()
+                
+                # 일반 돌아가기 버튼 클릭
+                elif not show_completion_screen and not show_failure_screen:
+                    back_button_rect = pygame.Rect(WIDTH // 2 - 100, HEIGHT - 80, 200, 50)
+                    if back_button_rect.collidepoint(event.pos):
+                        # 페이드 아웃 효과
+                        for i in range(fade_duration):
+                            fade_alpha = i * fade_step
+                            fade_surface.set_alpha(fade_alpha)
+                            fade_surface.fill((0, 0, 0))
+                            screen.blit(fade_surface, (0, 0))
+                            pygame.display.flip()
+                            clock.tick(60)
+                        running = False
+                
+                # 튜토리얼 영역 내에서 플레이어 돌 클릭 (완료/실패 화면이 아닐 때만)
+                if (not show_completion_screen and not show_failure_screen and
+                    tutorial_x <= mouse_pos.x <= tutorial_x + tutorial_width and 
+                    tutorial_y <= mouse_pos.y <= tutorial_y + tutorial_height):
+                    for stone in tutorial_stones:
+                        if stone.color[:3] == (0, 0, 0):  # 플레이어 돌만
+                            if (stone.body.position - mouse_pos).length <= STONE_RADIUS:
+                                tutorial_dragging = True
+                                tutorial_drag_shape = stone
+                                tutorial_drag_start = stone.body.position
+                                arrow_visible = False  # 드래그 시작하면 화살표 숨김
+                                break
+            
+            elif event.type == pygame.MOUSEBUTTONUP and tutorial_dragging:
+                drag_end = Vec2d(*event.pos)
+                raw_vec = tutorial_drag_start - drag_end
+                length = raw_vec.length
+
+                if length > MAX_DRAG_LENGTH:
+                    raw_vec = raw_vec.normalized() * MAX_DRAG_LENGTH
+                    length = MAX_DRAG_LENGTH
+
+                if length > 0:
+                    impulse = raw_vec.normalized() * (length * FORCE_MULTIPLIER + MIN_FORCE)
+                    tutorial_drag_shape.body.apply_impulse_at_world_point(impulse, tutorial_drag_shape.body.position)
+
+                tutorial_dragging = False
+                tutorial_drag_shape = None
+                arrow_visible = False  # 쏘는 순간 화살표 사라짐
+                
+                # 캐시 정리
+                if len(tutorial_path_cache) > 5:
+                    tutorial_path_cache.clear()
+
+        # 튜토리얼 성공/실패 체크
+        if not show_completion_screen and pending_result is None:
+            # 상대 돌이 판 밖으로 나갔는지 체크 (성공)
+            opponent_pos = opponent_body.position
+            player_pos = player_body.position
+            
+            # 성공 조건: 상대 돌이나 플레이어 돌이 판 밖으로 나갔을 때
+            if (opponent_pos.x < tutorial_x - STONE_RADIUS or 
+                opponent_pos.x > tutorial_x + tutorial_width + STONE_RADIUS or
+                opponent_pos.y < tutorial_y - STONE_RADIUS or
+                opponent_pos.y > tutorial_y + tutorial_height + STONE_RADIUS or
+                player_pos.x < tutorial_x - STONE_RADIUS or 
+                player_pos.x > tutorial_x + tutorial_width + STONE_RADIUS or
+                player_pos.y < tutorial_y - STONE_RADIUS or
+                player_pos.y > tutorial_y + tutorial_height + STONE_RADIUS):
+                pending_result = "success"
+                result_delay_timer = 0
+        
+        # 결과창 지연 처리
+        if pending_result is not None:
+            result_delay_timer += 1
+            if result_delay_timer >= result_delay:
+                if pending_result == "success":
+                    show_completion_screen = True
+                pending_result = None
+
+        # 물리 업데이트
+        tutorial_space.step(1/60.0)
 
         clock.tick(60)
 
@@ -1580,6 +2032,11 @@ def play_game(screen, clock, nickname, game_mode):
     turn_text = ""
     last_ai_time = None
     
+    # 경로 시뮬레이션 캐시 (성능 최적화용)
+    path_cache = {}
+    last_mouse_pos = None
+    last_drag_vector = None
+    
         # 모드별 시작 턴 설정
     if game_mode == 3:
         turn = "waiting_b"  # 3번 모드: AI(흑돌) 먼저 시작, 사람은 백돌 조작
@@ -1675,18 +2132,24 @@ def play_game(screen, clock, nickname, game_mode):
             elif evt.type == pygame.MOUSEBUTTONUP and dragging:
                 drag_end = Vec2d(*evt.pos)
                 raw_vec = drag_start - drag_end
-                dist = raw_vec.length                  
+                length = raw_vec.length                  
 
-                if dist > MAX_DRAG_LENGTH:
+                if length > MAX_DRAG_LENGTH:
                     raw_vec = raw_vec.normalized() * MAX_DRAG_LENGTH
-                    dist = MAX_DRAG_LENGTH
+                    length = MAX_DRAG_LENGTH
 
-                if dist > 0:
-                    impulse = raw_vec.normalized() * (dist * FORCE_MULTIPLIER + MIN_FORCE)
+                if length > 0:
+                    # 당긴 방향으로 발사
+                    impulse = raw_vec.normalized() * (length * FORCE_MULTIPLIER + MIN_FORCE)
                     drag_shape.body.apply_impulse_at_world_point(impulse, drag_shape.body.position)
 
                 dragging = False
                 drag_shape = None
+                
+                # 경로 캐시 정리 (메모리 관리)
+                if len(path_cache) > 10:  # 캐시 크기 제한
+                    path_cache.clear()
+                
                 if game_mode == 3:
                     turn = "waiting_b" # 백돌이 움직이고 흑돌 AI 턴이 되기 전
                 else:
@@ -1983,22 +2446,104 @@ def play_game(screen, clock, nickname, game_mode):
             center = drag_shape.body.position
             end_pos = center + unit * display_len
 
+            # 빨간선 (실선으로 유지)
             pygame.draw.line(
                 screen, (255, 0, 0),
                 (int(center.x), int(center.y)),
                 (int(end_pos.x), int(end_pos.y)), 2
             )
 
-            # 게임 모드 6일 때, 조준 보조선 표시 
+            # 게임 모드 6일 때, 실제 이동 경로 시뮬레이션 및 표시
             if game_mode == 6:
-                aim_length = MAX_DRAG_LENGTH * 1.5
-                aim_end_pos = center - unit * aim_length
-                
-                pygame.draw.line(
-                    screen, (173, 216, 230),
-                    (int(center.x), int(center.y)),
-                    (int(aim_end_pos.x), int(aim_end_pos.y)), 2
-                )
+                # 실제 이동 경로 시뮬레이션 및 표시
+                if length > 0:
+                    # 실제 발사와 동일한 벡터 계산 (drag_start - drag_end)
+                    actual_raw_vec = drag_start - mouse_pos
+                    actual_length = actual_raw_vec.length
+                    
+                    if actual_length > MAX_DRAG_LENGTH:
+                        actual_raw_vec = actual_raw_vec.normalized() * MAX_DRAG_LENGTH
+                        actual_length = MAX_DRAG_LENGTH
+                    
+                    # 캐시 키 생성 (실제 발사 벡터 기반)
+                    cache_key = (int(actual_raw_vec.x), int(actual_raw_vec.y), int(actual_length))
+                    
+                    # 캐시된 경로가 없거나 마우스 위치가 변경된 경우에만 시뮬레이션 실행
+                    if cache_key not in path_cache:
+                        # 임시 물리 공간 생성
+                        temp_space = pymunk.Space()
+                        temp_space.gravity = (0, 0)
+                        # 실제 공간과 동일한 감쇠 적용
+                        temp_space.damping = space.damping
+                        
+                        # 실제 게임의 모든 돌들을 임시 공간에 복사 (더 정확한 시뮬레이션)
+                        temp_stones = []
+                        for stone in stones:
+                            if stone != drag_shape:  # 현재 드래그 중인 돌은 제외
+                                temp_moment = pymunk.moment_for_circle(STONE_MASS, 0, STONE_RADIUS)
+                                temp_body = pymunk.Body(STONE_MASS, temp_moment)
+                                temp_body.position = stone.body.position
+                                temp_body.velocity = stone.body.velocity
+                                temp_shape = pymunk.Circle(temp_body, STONE_RADIUS)
+                                # physics.create_stone과 동일하게 맞춤
+                                temp_shape.elasticity = 1.0
+                                temp_shape.friction = 0.9
+                                temp_space.add(temp_body, temp_shape)
+                                temp_stones.append((temp_body, temp_shape))
+                        
+                        # 임시 돌 생성 (현재 돌과 동일한 물리 속성)
+                        temp_moment = pymunk.moment_for_circle(STONE_MASS, 0, STONE_RADIUS)
+                        temp_body = pymunk.Body(STONE_MASS, temp_moment)
+                        temp_body.position = center
+                        temp_shape = pymunk.Circle(temp_body, STONE_RADIUS)
+                        # physics.create_stone과 동일하게 맞춤
+                        temp_shape.elasticity = 1.0
+                        temp_shape.friction = 0.9
+                        temp_space.add(temp_body, temp_shape)
+                        
+                        # 임펄스 적용 (실제 발사와 동일한 힘 계산)
+                        impulse = actual_raw_vec.normalized() * (actual_length * FORCE_MULTIPLIER + MIN_FORCE)
+                        temp_body.apply_impulse_at_world_point(impulse, temp_body.position)
+                        
+                        # 경로 포인트들을 저장할 리스트
+                        path_points = []
+                        
+                        # 시뮬레이션 실행 (약 2초간, 더 정확한 시뮬레이션)
+                        for _ in range(120):  # 60fps * 2초
+                            temp_space.step(1/60.0)
+                            path_points.append(temp_body.position)
+                            
+                            # 속도가 충분히 느려지면 중단
+                            if temp_body.velocity.length < 5:
+                                break
+                        
+                        # 캐시에 저장
+                        path_cache[cache_key] = path_points
+                        
+                        # 임시 공간 정리
+                        temp_space.remove(temp_body, temp_shape)
+                        for temp_body, temp_shape in temp_stones:
+                            temp_space.remove(temp_body, temp_shape)
+                    
+                    # 캐시된 경로 사용
+                    path_points = path_cache[cache_key]
+                    
+                    # 경로 그리기 (점선으로, 더 조밀하게)
+                    if len(path_points) > 1:
+                        for i in range(len(path_points) - 1):
+                            if i % 1 == 0:  # 모든 포인트를 연결 (더 조밀하게)
+                                start_pt = path_points[i]
+                                end_pt = path_points[i + 1]
+                                pygame.draw.line(
+                                    screen, (0, 200, 255),  # 밝은 하늘색
+                                    (int(start_pt.x), int(start_pt.y)),
+                                    (int(end_pt.x), int(end_pt.y)), 2
+                                )
+                    
+                    # 최종 위치에 작은 원 표시
+                    if path_points:
+                        final_pos = path_points[-1]
+                        pygame.draw.circle(screen, (0, 200, 255), (int(final_pos.x), int(final_pos.y)), 4)
 
         font = get_font(24)
         hint_font = pygame.font.SysFont("DotumChe", 21)
@@ -2156,6 +2701,13 @@ def play_game(screen, clock, nickname, game_mode):
             mode_surface = font.render(mode_text, True, (0, 0, 0))
             mode_rect = mode_surface.get_rect(midtop=(WIDTH // 2, 10))
             screen.blit(mode_surface, mode_rect)
+
+            # 보조선 기능 안내 메시지
+            if dragging:
+                guide_text = "밝은 하늘색: 예상 경로"
+                guide_surface = hint_font.render(guide_text, True, (0, 200, 255))
+                guide_rect = guide_surface.get_rect(center=(WIDTH // 2, HEIGHT - 60))
+                screen.blit(guide_surface, guide_rect)
 
             hint_surf = hint_font.render("Backspace를 눌러 모드 선택으로 돌아가기", True, (255, 255, 255))
             screen.blit(hint_surf, (MARGIN, HEIGHT - 40))
