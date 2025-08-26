@@ -1,0 +1,100 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AlggaGo - 웹 프로토타입</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 20px;
+            background-color: #2c3e50;
+            font-family: 'Malgun Gothic', 'Arial', sans-serif;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            color: white;
+        }
+        
+        .game-container {
+            position: relative;
+            margin: 20px 0;
+        }
+        
+        #gameCanvas {
+            border: 3px solid #34495e;
+            background-color: #d2b48c;
+            cursor: crosshair;
+        }
+        
+        .ui-panel {
+            margin-top: 20px;
+            text-align: center;
+        }
+        
+        .button {
+            background-color: #3498db;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            margin: 5px;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 16px;
+        }
+        
+        .button:hover {
+            background-color: #2980b9;
+        }
+        
+        .button:disabled {
+            background-color: #7f8c8d;
+            cursor: not-allowed;
+        }
+        
+        .status {
+            margin: 10px 0;
+            font-size: 18px;
+            font-weight: bold;
+        }
+        
+        .instructions {
+            max-width: 600px;
+            margin: 20px auto;
+            padding: 15px;
+            background-color: #34495e;
+            border-radius: 8px;
+            line-height: 1.6;
+        }
+    </style>
+</head>
+<body>
+    <h1>AlggaGo - 웹 프로토타입</h1>
+    
+    <div class="game-container">
+        <canvas id="gameCanvas" width="800" height="800"></canvas>
+    </div>
+    
+    <div class="ui-panel">
+        <div class="status" id="status">게임 준비</div>
+        <button class="button" id="startBtn">게임 시작</button>
+        <button class="button" id="resetBtn">다시 시작</button>
+        <button class="button" id="tutorialBtn">튜토리얼</button>
+    </div>
+    
+    <div class="instructions">
+        <h3>게임 방법</h3>
+        <p>검은 돌을 클릭하고 드래그하여 흰 돌을 맞추세요!</p>
+        <ul>
+            <li>검은 돌을 클릭하고 아래쪽으로 드래그</li>
+            <li>드래그 거리에 따라 발사 힘이 결정됩니다</li>
+            <li>상대의 모든 돌을 밖으로 내보내면 승리!</li>
+        </ul>
+    </div>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/matter-js/0.19.0/matter.min.js"></script>
+    <script src="js/game.js"></script>
+    <script src="js/physics.js"></script>
+    <script src="js/ui.js"></script>
+</body>
+</html>
