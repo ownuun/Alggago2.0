@@ -19,6 +19,14 @@ from gymnasium import spaces
 from env import AlggaGoEnv
 from physics import WIDTH, HEIGHT, all_stones_stopped, MARGIN
 
+# 전용 훈련소 시스템 import
+try:
+    from specialized_training_manager import SpecializedTrainingManager
+    SPECIALIZED_TRAINING_AVAILABLE = True
+except ImportError:
+    print("[Warning] 전용 훈련소 시스템을 import할 수 없습니다. specialized_training_manager.py 파일이 필요합니다.")
+    SPECIALIZED_TRAINING_AVAILABLE = False
+
 # --- 하이퍼파라미터 및 설정 ---
 MAX_STAGES = 300
 TIMESTEPS_PER_STAGE = 50000
@@ -1099,32 +1107,41 @@ def main():
     model_A, model_B = None, None
     model_pattern = re.compile(r"model_(a|b)_(\d+)_([0-9.]+)\.zip")
 
-    try:
-        # 기존 모델 로드
-        models_found = {"a": [], "b": []}
-        if os.path.exists(SAVE_DIR):
-            for f in os.listdir(SAVE_DIR):
-                match = model_pattern.match(f)
-                if match: models_found[match.group(1)].append((int(match.group(2)), os.path.join(SAVE_DIR, f)))
-        if not models_found["a"]: raise FileNotFoundError("학습된 A 모델 없음")
-        
-        latest_a_path = max(models_found["a"], key=lambda i: i[0])[1]
-        latest_b_path = max(models_found["b"], key=lambda i: i[0])[1] if models_found["b"] else latest_a_path
-        
-        print(f"[INFO] 학습 이어하기: Model A({os.path.basename(latest_a_path)}), Model B({os.path.basename(latest_b_path)}) 로드")
-        model_A = PPO.load(latest_a_path, env=temp_env)
-        model_B = PPO.load(latest_b_path, env=temp_env)
+    # 기존 모델 확인
+    models_found = {"a": [], "b": []}
+    if os.path.exists(SAVE_DIR):
+        for f in os.listdir(SAVE_DIR):
+            match = model_pattern.match(f)
+            if match: 
+                models_found[match.group(1)].append((int(match.group(2)), os.path.join(SAVE_DIR, f)))
+    
+    # 기존 모델이 있는 경우 로드
+    if models_found["a"]:
+        try:
+            latest_a_path = max(models_found["a"], key=lambda i: i[0])[1]
+            latest_b_path = max(models_found["b"], key=lambda i: i[0])[1] if models_found["b"] else latest_a_path
+            
+            print(f"[INFO] 학습 이어하기: Model A({os.path.basename(latest_a_path)}), Model B({os.path.basename(latest_b_path)}) 로드")
+            model_A = PPO.load(latest_a_path, env=temp_env)
+            model_B = PPO.load(latest_b_path, env=temp_env)
 
-        model_timesteps = max(model_A.num_timesteps, model_B.num_timesteps)
-        if model_timesteps > total_timesteps_so_far:
-            print(f"[WARN] 모델의 타임스텝({model_timesteps:,})이 상태 파일({total_timesteps_so_far:,})보다 최신입니다. 모델 기준으로 동기화합니다.")
-            total_timesteps_so_far = model_timesteps
-        
-        print("\n[INFO] 현재 로드된 모델의 상태를 시각화합니다...")
-        visualize_one_game(model_A, model_B, current_ent_coef_A, current_ent_coef_B, stage_num=0)
+            model_timesteps = max(model_A.num_timesteps, model_B.num_timesteps)
+            if model_timesteps > total_timesteps_so_far:
+                print(f"[WARN] 모델의 타임스텝({model_timesteps:,})이 상태 파일({total_timesteps_so_far:,})보다 최신입니다. 모델 기준으로 동기화합니다.")
+                total_timesteps_so_far = model_timesteps
+            
+            print("\n[INFO] 현재 로드된 모델의 상태를 시각화합니다...")
+            visualize_one_game(model_A, model_B, current_ent_coef_A, current_ent_coef_B, stage_num=0)
+            
+        except Exception as e:
+            print(f"[WARN] 기존 모델 로드 실패 ({e}). 새 학습을 시작합니다.")
+            model_A, model_B = None, None
+    else:
+        print("[INFO] 기존 모델이 없습니다. 새 학습을 시작합니다.")
+        model_A, model_B = None, None
 
-    except Exception as e:
-        print(f"[INFO] 새 학습 시작 ({e}).")
+    # 새 학습 시작 (모델이 없는 경우)
+    if model_A is None or model_B is None:
 
         # [✅ 최종 수정] 예선전용 VecNormalize 환경을 먼저 생성합니다.
         N_ENVS_VS_C = 2 
@@ -1304,5 +1321,68 @@ def main():
     print("\n--- 전체 경쟁적 학습 완료 ---")
     temp_env.close()
 
+
+# --- 전용 훈련소 시스템 통합 함수들 ---
+def check_and_run_specialized_training(current_model_path=None, gauntlet_log_path="rl_logs_competitive/gauntlet_log.csv"):
+    """
+    성능 분석 후 필요시 전용 훈련소 시스템 실행
+    """
+    if not SPECIALIZED_TRAINING_AVAILABLE:
+        print("[Warning] 전용 훈련소 시스템을 사용할 수 없습니다.")
+        return None
+    
+    print("\n=== 전용 훈련소 시스템 검사 ===")
+    
+    # 전용 훈련소 매니저 초기화
+    manager = SpecializedTrainingManager(current_model_path)
+    
+    # 성능 분석
+    regular_success_rate, split_success_rate = manager.analyze_performance(gauntlet_log_path)
+    
+    if regular_success_rate is None or split_success_rate is None:
+        print("[Warning] 성능 분석에 실패했습니다.")
+        return None
+    
+    # 훈련 필요성 확인
+    needs_regular = manager.needs_regular_training(regular_success_rate)
+    needs_split = manager.needs_split_training(split_success_rate)
+    
+    if not needs_regular and not needs_split:
+        print("✅ 모든 성공률이 충분합니다. 전용 훈련이 필요하지 않습니다.")
+        return None
+    
+    # 전용 훈련 실행
+    print("🔧 전용 훈련이 필요합니다. 전용 훈련소를 시작합니다...")
+    trained_models = manager.run_specialized_training_cycle(gauntlet_log_path)
+    
+    if trained_models:
+        print("✅ 전용 훈련 완료!")
+        manager.visualize_training_results()
+        return trained_models
+    else:
+        print("❌ 전용 훈련에 실패했습니다.")
+        return None
+
+
+def integrate_specialized_training_into_main_loop():
+    """
+    메인 훈련 루프에 전용 훈련소 시스템 통합
+    """
+    if not SPECIALIZED_TRAINING_AVAILABLE:
+        return
+    
+    print("\n=== 전용 훈련소 시스템 통합 ===")
+    print("메인 훈련 루프에 전용 훈련소 시스템이 통합되었습니다.")
+    print("성공률이 미달될 때 자동으로 전용 훈련이 실행됩니다.")
+
+
 if __name__ == "__main__":
+    # 전용 훈련소 시스템 통합 확인
+    integrate_specialized_training_into_main_loop()
+    
+    # 메인 훈련 실행
     main()
+    
+    # 훈련 완료 후 전용 훈련소 검사
+    print("\n=== 훈련 완료 후 전용 훈련소 검사 ===")
+    check_and_run_specialized_training()
